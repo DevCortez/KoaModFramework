@@ -9,6 +9,32 @@
 
 using namespace rapidjson;
 
+void* LookupSignature(const std::vector<unsigned int> &signature) {
+    printf("Size of signature %d\n", signature.size());
+    INT32 start_address = (INT32)GetModuleHandle(0);
+
+    for (INT32 offset = 0; offset < 0x00F3A000-signature.size(); offset++) {
+        bool valid = true;
+
+        for (int byte_offset = 0; byte_offset < signature.size(); byte_offset++) {
+            if (signature[byte_offset] > 0xFF) {
+                continue;
+            }
+            
+            if (*(BYTE*)(offset + start_address + byte_offset) != signature[byte_offset]) {
+                valid = false;
+                break;
+            }
+        }
+
+        if (valid) {
+            return (void*)(start_address + offset);
+        }
+    }
+
+    return 0;
+}
+
 bool LoadMod(std::string path) {
     printf("Reading mod %s\n", path.c_str());
 
@@ -42,7 +68,7 @@ bool LoadMod(std::string path) {
                 printf("\tInvalid signature\n");
                 return false;
             }
-            std::map<std::string, std::tuple<unsigned int, unsigned int>> vars;
+            std::map<std::string, std::tuple<double, unsigned int>> vars;
 
             if (element.HasMember("vars"))
             {
@@ -57,14 +83,13 @@ bool LoadMod(std::string path) {
 
                     std::string variable_name = variable->name.GetString(); 
                     const Value& variable_buffer = element["vars"][variable_name.c_str()];
-                    unsigned int variable_value = variable_buffer[0].GetUint();
-                    unsigned int variable_size = variable_buffer[1].GetUint();
-
+                    double variable_value = variable_buffer[0].GetDouble();
+                    unsigned int variable_type = variable_buffer[1].GetUint();
                     vars.emplace(variable_name,
-                        std::tuple<unsigned int, unsigned int>(variable_value, variable_size));
+                        std::tuple<double, unsigned int>(variable_value, variable_type));
 
-                    printf("\tAdded variable %s with value %d and size %d\n", variable_name.c_str(), 
-                        variable_value, variable_size);
+                    printf("\tAdded variable %s with value %f and type %d\n", variable_name.c_str(), 
+                        variable_value, variable_type);
                 }
             }
 
@@ -99,9 +124,37 @@ bool LoadMod(std::string path) {
                     std::string variable_name = patch_string.substr(1,
                         name_end - 1);
 
-                    auto [value, size] = vars[variable_name];
-                    for (int i = 0; i < size; i++) {
-                        patch.push_back((value >> (8 * i)) & 0xff);
+                    auto [double_value, variable_type] = vars[variable_name];
+                    unsigned int int_value = double_value;
+                    float float_value = double_value;
+
+                    switch (variable_type)
+                    {
+                        case 1:
+                            patch.push_back(int_value & 0xff);
+                            break;
+                        case 2:
+                            for (int i = 0; i < 2; i++) {
+                                patch.push_back((int_value >> (8 * i)) & 0xff);
+                            }
+                            break;
+                        case 3:
+                            for (int i = 0; i < 4; i++) {
+                                patch.push_back((int_value >> (8 * i)) & 0xff);
+                            }
+                            break;
+                        case 4:
+                            for (int i = 0; i < sizeof(float); i++) {
+                                patch.push_back((*(int*)(&float_value) >> (8 * i)) & 0xff);
+                            }
+                            break;
+                        case 5:
+                            for (int i = 0; i < sizeof(double); i++) {
+                                patch.push_back((*(INT64*)(&double_value) >> (8 * i)) & 0xff);
+                            }
+                            break;
+                    default:
+                        break;
                     }
 
                     patch_string.erase(0, name_end + 1);
@@ -120,11 +173,38 @@ bool LoadMod(std::string path) {
                 }
             }
 
+            while (signature_string.length() > 0) {
+                if (signature_string[0] == '?') {
+                    // Anything bigger than a byte is a mask
+                    signature.push_back(0xFFFFFFFF);
+                    signature_string.erase(0, 2);
+                }
+                else {
+                    unsigned int value = std::stoul(signature_string.substr(0, 2),
+                        nullptr, 16);
+                    signature.push_back(value);
+                    signature_string.erase(0, 2);
+                }
+            }
+
+            // More than lazy debug output
             for (auto x : patch) {
                 printf("%02X", x);
             }
 
-            printf("\n-- PATCH DEBUG\n\n");
+            printf("\n-- PATCH DEBUG\n");
+
+            for (auto x : signature) {
+                printf("%02X", x);
+            }
+
+            printf("\n-- SIGNATURE DEBUG\n\n");
+
+            // Look for the signature in the memory
+            void* address = LookupSignature(signature);
+            if (address != 0) {
+                printf("Address found @ %x\n", (int)address);
+            }
         }
     }
     else if (path.find(".dll") != std::string::npos) {
