@@ -11,12 +11,12 @@ using namespace rapidjson;
 
 void* LookupSignature(const std::vector<unsigned int> &signature) {
     printf("Size of signature %d\n", signature.size());
-    INT32 start_address = (INT32)GetModuleHandle(0);
+    DWORD start_address = (DWORD)GetModuleHandle(0);
 
-    for (INT32 offset = 0; offset < 0x00F3A000-signature.size(); offset++) {
+    for (DWORD offset = 0; offset < 0x00F3A000-signature.size(); offset++) {
         bool valid = true;
 
-        for (int byte_offset = 0; byte_offset < signature.size(); byte_offset++) {
+        for (DWORD byte_offset = 0; byte_offset < signature.size(); byte_offset++) {
             if (signature[byte_offset] > 0xFF) {
                 continue;
             }
@@ -33,6 +33,18 @@ void* LookupSignature(const std::vector<unsigned int> &signature) {
     }
 
     return 0;
+}
+
+void WritePatch(const void* patch_address, const std::vector<unsigned int> &patch) {
+    for (int i = 0; i < patch.size(); i++) {
+        if (patch[i] > 0xFF) {
+            continue;
+        }
+
+        DWORD placeholder;
+        WriteProcessMemory((HANDLE)-1, (LPVOID)((DWORD)patch_address + i), 
+            &patch[i], 1, &placeholder);
+    }
 }
 
 bool LoadMod(std::string path) {
@@ -52,20 +64,20 @@ bool LoadMod(std::string path) {
         if (!patches.IsArray())
             return false;
 
-        for (int index = 0; index < patches.Size(); index++) {
+        for (unsigned int index = 0; index < patches.Size(); index++) {
             const Value& element = patches[index];
             
             // Validate json
             if (!element["description"].IsString()) {
-                printf("\tInvalid description\n");
+                printf("Invalid description\n");
                 return false;
             }
             if (!element["patch"].IsString()) {
-                printf("\tInvalid patch\n");
+                printf("Invalid patch\n");
                 return false;
             }
             if (!element["signature"].IsString()) {
-                printf("\tInvalid signature\n");
+                printf("Invalid signature\n");
                 return false;
             }
             std::map<std::string, std::tuple<double, unsigned int>> vars;
@@ -73,7 +85,7 @@ bool LoadMod(std::string path) {
             if (element.HasMember("vars"))
             {
                 if (!element["vars"].IsObject()) {
-                    printf("\tInvalid vars\n");
+                    printf("Invalid vars\n");
                     return false;
                 }
 
@@ -88,7 +100,7 @@ bool LoadMod(std::string path) {
                     vars.emplace(variable_name,
                         std::tuple<double, unsigned int>(variable_value, variable_type));
 
-                    printf("\tAdded variable %s with value %f and type %d\n", variable_name.c_str(), 
+                    printf("Added variable %s with value %f and type %d\n", variable_name.c_str(), 
                         variable_value, variable_type);
                 }
             }
@@ -187,6 +199,7 @@ bool LoadMod(std::string path) {
                 }
             }
 
+            /*
             // More than lazy debug output
             for (auto x : patch) {
                 printf("%02X", x);
@@ -199,11 +212,15 @@ bool LoadMod(std::string path) {
             }
 
             printf("\n-- SIGNATURE DEBUG\n\n");
-
+            */
             // Look for the signature in the memory
             void* address = LookupSignature(signature);
             if (address != 0) {
                 printf("Address found @ %x\n", (int)address);
+                WritePatch(address, patch);
+            }
+            else {
+                return false;
             }
         }
     }
