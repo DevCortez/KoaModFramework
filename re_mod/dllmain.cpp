@@ -200,20 +200,6 @@ bool LoadMod(std::string path) {
                 }
             }
 
-            /*
-            // More than lazy debug output
-            for (auto x : patch) {
-                printf("%02X", x);
-            }
-
-            printf("\n-- PATCH DEBUG\n");
-
-            for (auto x : signature) {
-                printf("%02X", x);
-            }
-
-            printf("\n-- SIGNATURE DEBUG\n\n");
-            */
             // Look for the signature in the memory
             void* address = LookupSignature(signature);
             if (address != 0) {
