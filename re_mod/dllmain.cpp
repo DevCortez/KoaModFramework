@@ -10,6 +10,41 @@
 
 using namespace rapidjson;
 
+// Globals
+int lua_state = 0;
+
+// Constants
+const auto NEW_STATE_HOOK_SIGNATURE = "8B4708FF88DC0200008BC75F5E5D5B59";
+const auto KI_LUA_PUSHSTRING = "8B54240885D275108B4C24048B4124891083C008894124C38BC2568D70018BFF8A084084C975F92BC6508B44240C5250E8ABFDFFFF83C40C5EC3CC";
+const auto BASE_DOFILE = "568B7424088B4E248B4628578BF92BF833D2F7C7F8FFFFFF7E7B3BC1720433FF";
+const auto REQUIRE_HOOK = "508D4C241CE8????????6A018D44241C508D4C24";
+const auto REQUIRE_HOOK_RETURN = "5E5BB8010000005F83C478C36A3D";
+
+// Game's functions
+void (__cdecl *ki_lua_pushstring)(int state, const char* str) = nullptr;
+int (__cdecl *base_dofile)(int state) = nullptr;
+
+std::vector<unsigned int> create_signature_from_string(const std::string signature) {
+    std::string local_signature = signature;
+    std::vector<unsigned int> result;
+
+    while (local_signature.length() > 0) {
+        if (local_signature[0] == '?') {
+            // Anything bigger than a byte is a mask
+            result.push_back(0xFFFFFFFF);
+            local_signature.erase(0, 2);
+        }
+        else {
+            unsigned int value = std::stoul(local_signature.substr(0, 2),
+                nullptr, 16);
+            result.push_back(value);
+            local_signature.erase(0, 2);
+        }
+    }
+
+    return result;
+}
+
 void* LookupSignature(const std::vector<unsigned int> &signature) {
     printf("Size of signature %d\n", signature.size());
     DWORD start_address = (DWORD)GetModuleHandle(0);
@@ -34,6 +69,128 @@ void* LookupSignature(const std::vector<unsigned int> &signature) {
     }
 
     return 0;
+}
+
+int __stdcall _new_state_hook(int state) {
+    lua_state = state;
+    printf("ki_kore_newstate created 0x%08X state\n", state);
+    return state;
+}
+
+void hook_new_state() {
+    /*
+    * This roughly translates to
+    * push eax
+    * call _new_state_hook
+    * retn
+    */
+    std::vector<unsigned int> signature = create_signature_from_string(NEW_STATE_HOOK_SIGNATURE);
+    void* address = LookupSignature(signature);
+    address = (LPVOID)((DWORD)address + 16); // Offset for the patch
+    BYTE opcode = 0x50;
+    DWORD placeholder;
+    WriteProcessMemory((HANDLE)-1, address, &opcode, 1, &placeholder);
+    opcode = 0xe8;
+    WriteProcessMemory((HANDLE)-1, (LPVOID)((DWORD)address + 1), &opcode, 1, &placeholder);
+    DWORD calculated_address = (DWORD)&_new_state_hook - (DWORD)address - 5 - 1;
+    WriteProcessMemory((HANDLE)-1, (LPVOID)((DWORD)address + 2), &calculated_address, 4, &placeholder);
+    opcode = 0xc3;
+    WriteProcessMemory((HANDLE)-1, (LPVOID)((DWORD)address + 6), &opcode, 1, &placeholder);
+
+    printf("Hooked ki_kore_newstate\n");
+}
+
+char* _file;
+std::vector<std::string> files_being_loaded;
+DWORD _require_hook_return = 0;
+bool require_hook_enabled = true;
+
+void _stdcall _require_hook_process(char* filename) {
+    if (require_hook_enabled) {
+        files_being_loaded.push_back(std::string(filename));
+    }
+    // current_file = filename;
+    /*std::string loaded_file(filename);
+
+    // Make sure it's not recursive
+    if (!require_hook_disabled && last_file_loaded.compare(loaded_file) != 0) {
+        last_file_loaded = loaded_file;
+        require_hook_disabled = true;
+        printf("Require hook %s\n", filename);
+        require_hook_disabled = false;
+    }*/
+}
+
+void _stdcall _require_hook_end_process() {
+    if (require_hook_enabled) {
+        require_hook_enabled = false;
+        std::string current_file = files_being_loaded.back();
+        files_being_loaded.pop_back();
+        printf("Finished loading script %s\n", current_file.c_str());
+
+        // Do stuff with the script
+        if (current_file.compare("name_win") == 0) {
+            // Oh boy, lock and load
+            printf("WooOoooOOH modding powa\n");
+            ki_lua_pushstring(lua_state, ".\\name_winz.lua");
+            base_dofile(lua_state);
+        }
+
+        require_hook_enabled = true;
+    }
+}
+
+__declspec(naked) void _require_hook_end() {
+    _asm {
+        pushad
+        call _require_hook_end_process
+        popad
+        pop esi
+        pop ebx
+        mov eax, 1
+        pop edi
+        add esp, 0x78
+        ret
+    }
+}
+
+__declspec(naked) void _require_hook() {
+    _asm {
+        push eax
+        lea ecx, ss: [esp + 0x1C]
+        mov _file, eax
+        pushad
+        push eax
+        call _require_hook_process
+        popad
+        jmp _require_hook_return
+    }
+}
+
+void hook_require() {
+    std::vector<unsigned int> signature = create_signature_from_string(REQUIRE_HOOK);
+    void* address = LookupSignature(signature);
+    BYTE opcode = 0xe9;
+    DWORD placeholder;
+    WriteProcessMemory((HANDLE)-1, address, &opcode, 1, &placeholder);
+    DWORD calculated_address = (DWORD)&_require_hook - (DWORD)address - 5;
+    WriteProcessMemory((HANDLE)-1, (LPVOID)((DWORD)address + 1), &calculated_address, 4, &placeholder);
+    _require_hook_return = (DWORD)address + 5;
+
+    signature = create_signature_from_string(REQUIRE_HOOK_RETURN);
+    address = LookupSignature(signature);
+    opcode = 0xe9;
+    placeholder;
+    WriteProcessMemory((HANDLE)-1, address, &opcode, 1, &placeholder);
+    calculated_address = (DWORD)&_require_hook_end - (DWORD)address - 5;
+    WriteProcessMemory((HANDLE)-1, (LPVOID)((DWORD)address + 1), &calculated_address, 4, &placeholder);
+}
+
+void find_game_functions() {
+    std::vector<unsigned int> signature = create_signature_from_string(KI_LUA_PUSHSTRING);
+    ki_lua_pushstring = (void (*__cdecl)(int state, const char* str))LookupSignature(signature);
+    signature = create_signature_from_string(BASE_DOFILE);
+    base_dofile = (int (*__cdecl)(int state))LookupSignature(signature);
 }
 
 void WritePatch(const void* patch_address, const std::vector<unsigned int> &patch) {
@@ -186,19 +343,7 @@ bool LoadMod(std::string path) {
                 }
             }
 
-            while (signature_string.length() > 0) {
-                if (signature_string[0] == '?') {
-                    // Anything bigger than a byte is a mask
-                    signature.push_back(0xFFFFFFFF);
-                    signature_string.erase(0, 2);
-                }
-                else {
-                    unsigned int value = std::stoul(signature_string.substr(0, 2),
-                        nullptr, 16);
-                    signature.push_back(value);
-                    signature_string.erase(0, 2);
-                }
-            }
+            signature = create_signature_from_string(signature_string);
 
             // Look for the signature in the memory
             void* address = LookupSignature(signature);
@@ -238,7 +383,13 @@ bool Initialize() {
     freopen_s(&placeholder, "CONOUT$", "w", stdout);
 
     printf("Mod framework initialization\n");
+
+    // Write them hooks
+    find_game_functions();
+    hook_new_state();
+    hook_require();
     
+    // Load them mods
     for (const auto& entry : std::filesystem::directory_iterator(".\\mods\\")) {
         if (!LoadMod(entry.path().string())) {
             result = false;
