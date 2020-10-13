@@ -16,13 +16,15 @@ int lua_state = 0;
 // Constants
 const auto NEW_STATE_HOOK_SIGNATURE = "8B4708FF88DC0200008BC75F5E5D5B59";
 const auto KI_LUA_PUSHSTRING = "8B54240885D275108B4C24048B4124891083C008894124C38BC2568D70018BFF8A084084C975F92BC6508B44240C5250E8ABFDFFFF83C40C5EC3CC";
-const auto BASE_DOFILE = "568B7424088B4E248B4628578BF92BF833D2F7C7F8FFFFFF7E7B3BC1720433FF";
+const auto LUAL_LOADFILE = "8B442408508B4424088B480881C1A802";
 const auto REQUIRE_HOOK = "508D4C241CE8????????6A018D44241C508D4C24";
 const auto REQUIRE_HOOK_RETURN = "5E5BB8010000005F83C478C36A3D";
+const auto LUA_CALL = "8B44240C8B4C24088B5424046A00505152E8????????83C410C3CCCCCCCCCCCC558BEC83EC6C";
 
 // Game's functions
 void (__cdecl *ki_lua_pushstring)(int state, const char* str) = nullptr;
-int (__cdecl *base_dofile)(int state) = nullptr;
+int (__cdecl *luaL_loadfile)(int state, const char* filename) = nullptr;
+void (__cdecl *lua_call)(int state, int nargs, int nresults) = nullptr;
 
 std::vector<unsigned int> create_signature_from_string(const std::string signature) {
     std::string local_signature = signature;
@@ -130,10 +132,11 @@ void _stdcall _require_hook_end_process() {
 
         // Do stuff with the script
         if (current_file.compare("name_win") == 0) {
-            // Oh boy, lock and load
-            printf("WooOoooOOH modding powa\n");
-            ki_lua_pushstring(lua_state, ".\\name_winz.lua");
-            base_dofile(lua_state);
+            int result = luaL_loadfile(lua_state, "name_winz.lua");
+            printf("Loaded script with result %x\n", result);
+            if (result == 0) {
+                lua_call(lua_state, 0, 0);
+            }
         }
 
         require_hook_enabled = true;
@@ -189,8 +192,10 @@ void hook_require() {
 void find_game_functions() {
     std::vector<unsigned int> signature = create_signature_from_string(KI_LUA_PUSHSTRING);
     ki_lua_pushstring = (void (*__cdecl)(int state, const char* str))LookupSignature(signature);
-    signature = create_signature_from_string(BASE_DOFILE);
-    base_dofile = (int (*__cdecl)(int state))LookupSignature(signature);
+    signature = create_signature_from_string(LUAL_LOADFILE);
+    luaL_loadfile = (int(__cdecl*)(int state, const char* filename))LookupSignature(signature);
+    signature = create_signature_from_string(LUA_CALL);
+    lua_call = (void (__cdecl *)(int state, int nargs, int nresults))LookupSignature(signature);
 }
 
 void WritePatch(const void* patch_address, const std::vector<unsigned int> &patch) {
