@@ -20,6 +20,7 @@ const auto LUAL_LOADFILE = "8B442408508B4424088B480881C1A802";
 const auto REQUIRE_HOOK = "508D4C241CE8????????6A018D44241C508D4C24";
 const auto REQUIRE_HOOK_RETURN = "5E5BB8010000005F83C478C36A3D";
 const auto LUA_CALL = "8B44240C8B4C24088B5424046A00505152E8????????83C410C3CCCCCCCCCCCC558BEC83EC6C";
+const auto FREE_STRING = "51578BF98B0785C07468536A248D4C240C32DB";
 
 // Game's functions
 void (__cdecl *ki_lua_pushstring)(int state, const char* str) = nullptr;
@@ -111,16 +112,6 @@ void _stdcall _require_hook_process(char* filename) {
     if (require_hook_enabled) {
         files_being_loaded.push_back(std::string(filename));
     }
-    // current_file = filename;
-    /*std::string loaded_file(filename);
-
-    // Make sure it's not recursive
-    if (!require_hook_disabled && last_file_loaded.compare(loaded_file) != 0) {
-        last_file_loaded = loaded_file;
-        require_hook_disabled = true;
-        printf("Require hook %s\n", filename);
-        require_hook_disabled = false;
-    }*/
 }
 
 void _stdcall _require_hook_end_process() {
@@ -131,13 +122,17 @@ void _stdcall _require_hook_end_process() {
         printf("Finished loading script %s\n", current_file.c_str());
 
         // Do stuff with the script
-        if (current_file.compare("name_win") == 0) {
-            int result = luaL_loadfile(lua_state, "name_winz.lua");
+        //*
+        if (current_file.compare("MQ13") == 0) {
+            int result = luaL_loadfile(lua_state, ".\\mods\\name_winz.lua");
             printf("Loaded script with result %x\n", result);
             if (result == 0) {
+                printf("Doing luacall on state %X\n", lua_state);
                 lua_call(lua_state, 0, 0);
+                printf("Sucessful\n");
             }
         }
+        //*/
 
         require_hook_enabled = true;
     }
