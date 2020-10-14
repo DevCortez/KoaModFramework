@@ -7,6 +7,7 @@
 #include <fstream>
 #include <map>
 #include <vector>
+#include <future>
 
 using namespace rapidjson;
 
@@ -49,25 +50,54 @@ std::vector<unsigned int> create_signature_from_string(const std::string signatu
 }
 
 void* LookupSignature(const std::vector<unsigned int> &signature) {
-    printf("Size of signature %d\n", signature.size());
     DWORD start_address = (DWORD)GetModuleHandle(0);
 
-    for (DWORD offset = 0; offset < 0x00F3A000-signature.size(); offset++) {
-        bool valid = true;
+    std::vector<std::future<int>> threads;
 
-        for (DWORD byte_offset = 0; byte_offset < signature.size(); byte_offset++) {
-            if (signature[byte_offset] > 0xFF) {
-                continue;
-            }
-            
-            if (*(BYTE*)(offset + start_address + byte_offset) != signature[byte_offset]) {
-                valid = false;
-                break;
-            }
-        }
+    for (DWORD offset = 0; offset < 0x00F3A000-signature.size(); offset+=0x100000) {
+        threads.push_back(std::async(std::launch::async, [](std::vector<unsigned int> sig, DWORD address, DWORD size)->int {
+            int result = 0;
+            bool valid = true;
+            bool critical_failure = false;
 
-        if (valid) {
-            return (void*)(start_address + offset);
+            for (DWORD offset = 0; offset < size - sig.size(); offset++) {
+                bool found = true;
+
+                try {
+                    for (DWORD byte_offset = 0; byte_offset < sig.size(); byte_offset++) {
+                        if (sig[byte_offset] > 0xFF) {
+                            continue;
+                        }
+
+                        if (*(BYTE*)(offset + address + byte_offset) != sig[byte_offset]) {
+                            found = false;
+                            break;
+                        }
+                    }
+                }
+                catch(std::exception e){
+                    // Most likely hit a protected memory region
+                    critical_failure = true;
+                }
+
+                if (critical_failure) {
+                    return 0;
+                }
+
+                if (found) {
+                    return address + offset;
+                }
+            }
+
+            return 0;
+            }, signature, offset + start_address, 0x200000));
+    }
+    
+    for (auto& thread : threads) {
+        DWORD result = thread.get();
+
+        if (result) {
+            return (void*)result;
         }
     }
 
@@ -411,9 +441,7 @@ BOOL APIENTRY DllMain( HMODULE hModule,
                      ) {
     switch (ul_reason_for_call) {
         case DLL_PROCESS_ATTACH:
-            if (!Initialize()) {
-                MessageBoxA(0, "The mod framework failed to load properly", "Mod framework", 0);
-            }
+            CreateThread(nullptr, 0, (LPTHREAD_START_ROUTINE)&Initialize, 0, 0, nullptr);
             break;
 
         case DLL_THREAD_ATTACH:
