@@ -117,36 +117,22 @@ void _stdcall _require_hook_end_process(char* pFile) {
         printf("Finished loading script %s\n", current_file.c_str());
 
         // Do stuff with the script
-        //*
-        if (lua_scripts.find(current_file) != lua_scripts.end()) {
-            for (auto script : lua_scripts[current_file]) {
-                int load_result = luaL_loadfile(lua_state, script.c_str());
-
-                if (!load_result) {
-                    try {
-                        lua_call(lua_state, 0, 0);
-                    }
-                    catch (const std::exception& e){                        
-                        printf("Failed loading module %s with error\n\t %s\n", script.c_str(), e.what());
-                    }
-                    
+        for (auto script : lua_scripts[current_file]) {
+            printf("Found script %s for %s\n", script.c_str(), current_file.c_str());
+            int load_result = luaL_loadfile(lua_state, script.c_str());
+            if (load_result == 0) {
+                try {
+                    lua_call(lua_state, 0, 0);
+                    printf("Loaded custom script %s\n", script.c_str());
                 }
-                else {
-                    printf("Failed loading module %s with code %08X\n", script.c_str(), load_result);
+                catch (const std::exception& e) {
+                    printf("Failed loading module %s with error\n\t %s\n", script.c_str(), e.what());
                 }
             }
-            
-        }
-        if (current_file.compare("ConsumableManager") == 0) {
-            int result = luaL_loadfile(lua_state, ".\\mods\\name_winz.lua");
-            printf("Loaded script with result %x\n", result);
-            if (result == 0) {
-                printf("Doing luacall on state %X\n", lua_state);
-                lua_call(lua_state, 0, 0);
-                printf("Sucessful\n");
+            else {
+                printf("Failed loading module %s with code %08X\n", script.c_str(), load_result);
             }
         }
-        //*/
 
         require_hook_enabled = true;
     }
@@ -217,6 +203,7 @@ bool LoadMod(std::string path) {
         // Parse the json
         Document document;
         document.Parse(file_content.c_str());
+
         if (document.HasMember("scripts")) {
             const Value& scripts = document["scripts"];
 
