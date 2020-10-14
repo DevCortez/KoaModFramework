@@ -18,7 +18,7 @@ const auto NEW_STATE_HOOK_SIGNATURE = "8B4708FF88DC0200008BC75F5E5D5B59";
 const auto KI_LUA_PUSHSTRING = "8B54240885D275108B4C24048B4124891083C008894124C38BC2568D70018BFF8A084084C975F92BC6508B44240C5250E8ABFDFFFF83C40C5EC3CC";
 const auto LUAL_LOADFILE = "8B442408508B4424088B480881C1A802";
 const auto REQUIRE_HOOK = "508D4C241CE8????????6A018D44241C508D4C24";
-const auto REQUIRE_HOOK_RETURN = "5E5BB8010000005F83C478C36A3D";
+const auto REQUIRE_HOOK_RETURN = "E8????????5E5BB8010000005F83C478C36A3D";
 const auto LUA_CALL = "8B44240C8B4C24088B5424046A00505152E8????????83C410C3CCCCCCCCCCCC558BEC83EC6C";
 const auto FREE_STRING = "51578BF98B0785C07468536A248D4C240C32DB";
 
@@ -26,6 +26,7 @@ const auto FREE_STRING = "51578BF98B0785C07468536A248D4C240C32DB";
 void (__cdecl *ki_lua_pushstring)(int state, const char* str) = nullptr;
 int (__cdecl *luaL_loadfile)(int state, const char* filename) = nullptr;
 void (__cdecl *lua_call)(int state, int nargs, int nresults) = nullptr;
+void* free_string = nullptr;
 
 std::vector<unsigned int> create_signature_from_string(const std::string signature) {
     std::string local_signature = signature;
@@ -108,22 +109,17 @@ std::vector<std::string> files_being_loaded;
 DWORD _require_hook_return = 0;
 bool require_hook_enabled = true;
 
-void _stdcall _require_hook_process(char* filename) {
-    if (require_hook_enabled) {
-        files_being_loaded.push_back(std::string(filename));
-    }
-}
 
-void _stdcall _require_hook_end_process() {
+
+void _stdcall _require_hook_end_process(char* pFile) {
     if (require_hook_enabled) {
         require_hook_enabled = false;
-        std::string current_file = files_being_loaded.back();
-        files_being_loaded.pop_back();
+        std::string current_file(pFile);
         printf("Finished loading script %s\n", current_file.c_str());
 
         // Do stuff with the script
         //*
-        if (current_file.compare("MQ13") == 0) {
+        if (current_file.compare("ConsumableManager") == 0) {
             int result = luaL_loadfile(lua_state, ".\\mods\\name_winz.lua");
             printf("Loaded script with result %x\n", result);
             if (result == 0) {
@@ -141,8 +137,11 @@ void _stdcall _require_hook_end_process() {
 __declspec(naked) void _require_hook_end() {
     _asm {
         pushad
+        mov ecx, [ecx]
+        push [ecx]
         call _require_hook_end_process
         popad
+        call free_string
         pop esi
         pop ebx
         mov eax, 1
@@ -152,35 +151,17 @@ __declspec(naked) void _require_hook_end() {
     }
 }
 
-__declspec(naked) void _require_hook() {
-    _asm {
-        push eax
-        lea ecx, ss: [esp + 0x1C]
-        mov _file, eax
-        pushad
-        push eax
-        call _require_hook_process
-        popad
-        jmp _require_hook_return
-    }
-}
-
 void hook_require() {
     std::vector<unsigned int> signature = create_signature_from_string(REQUIRE_HOOK);
-    void* address = LookupSignature(signature);
-    BYTE opcode = 0xe9;
+    void* address;
+    BYTE opcode;
     DWORD placeholder;
-    WriteProcessMemory((HANDLE)-1, address, &opcode, 1, &placeholder);
-    DWORD calculated_address = (DWORD)&_require_hook - (DWORD)address - 5;
-    WriteProcessMemory((HANDLE)-1, (LPVOID)((DWORD)address + 1), &calculated_address, 4, &placeholder);
-    _require_hook_return = (DWORD)address + 5;
 
     signature = create_signature_from_string(REQUIRE_HOOK_RETURN);
     address = LookupSignature(signature);
     opcode = 0xe9;
-    placeholder;
     WriteProcessMemory((HANDLE)-1, address, &opcode, 1, &placeholder);
-    calculated_address = (DWORD)&_require_hook_end - (DWORD)address - 5;
+    DWORD calculated_address = (DWORD)&_require_hook_end - (DWORD)address - 5;
     WriteProcessMemory((HANDLE)-1, (LPVOID)((DWORD)address + 1), &calculated_address, 4, &placeholder);
 }
 
@@ -190,7 +171,9 @@ void find_game_functions() {
     signature = create_signature_from_string(LUAL_LOADFILE);
     luaL_loadfile = (int(__cdecl*)(int state, const char* filename))LookupSignature(signature);
     signature = create_signature_from_string(LUA_CALL);
-    lua_call = (void (__cdecl *)(int state, int nargs, int nresults))LookupSignature(signature);
+    lua_call = (void(__cdecl*)(int state, int nargs, int nresults))LookupSignature(signature);
+    signature = create_signature_from_string(FREE_STRING);
+    free_string = LookupSignature(signature);
 }
 
 void WritePatch(const void* patch_address, const std::vector<unsigned int> &patch) {
