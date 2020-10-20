@@ -11,6 +11,15 @@
 
 using namespace rapidjson;
 
+typedef int (*lua_CFunction) (int state);
+
+// Structs
+typedef struct luaL_Reg {
+    const char* name;
+    lua_CFunction func;
+} luaL_Reg;
+
+
 // Globals
 int lua_state = 0;
 std::map<std::string, std::vector<std::string>> lua_scripts;
@@ -21,12 +30,20 @@ const auto LUAL_LOADFILE = "8B442408508B4424088B480881C1A802";
 const auto REQUIRE_HOOK_RETURN = "E8????????5E5BB8010000005F83C478C36A3D";
 const auto LUA_CALL = "8B44240C8B4C24088B5424046A00505152E8????????83C410C3CCCCCCCCCCCC558BEC83EC6C";
 const auto FREE_STRING = "51578BF98B0785C07468536A248D4C240C32DB";
+const auto LUA_GETTOP = "8B4C24048B41242B4128C1F803C3CCCC8B4C24048B41242B";
+const auto LUA_TOSTRING = "8B4C240881F9F0D8FFFF7E3585C97E1D8B4424048B50288D4CCAF83B4824731E6A005150E8";
+const auto LUA_REGISTER = "8B44240C8B4C2408568B7424086A006A005051E8";
+const auto LUA_ISSTRING = "8B4424083DF0D8FFFF7E3D85C07E258B4C24048B51288D44C2F83B412473268B0083E00F83F804740583F8037517B801000000C3790F8B4C24048B51248D04C23B412873DA33C0C3750E8B4424048B400805E4000000EBC73DEED8FFFF75098B";
 
 // Game's functions
 void (__cdecl *ki_lua_pushstring)(int state, const char* str) = nullptr;
 int (__cdecl *luaL_loadfile)(int state, const char* filename) = nullptr;
 void (__cdecl *lua_call)(int state, int nargs, int nresults) = nullptr;
 void* free_string = nullptr;
+int (__cdecl *ki_lua_gettop)(int state) = nullptr;
+const char* (__cdecl *ki_lua_tostring)(int state, int index) = nullptr;
+void (__cdecl *luaL_register)(int state, const char* libname, const luaL_Reg* r) = nullptr;
+int (__cdecl *ki_lua_isstring)(int state, int index) = nullptr;
 
 std::vector<unsigned int> create_signature_from_string(const std::string signature) {
     std::string local_signature = signature;
@@ -97,16 +114,40 @@ void* LookupSignature(const std::vector<unsigned int> &signature) {
         DWORD result = thread.get();
 
         if (result) {
+            printf("Found signature @ %08X\n", result);
             return (void*)result;
         }
     }
 
+    printf("Failed getting signature\n");
     return 0;
 }
+
+static int fake_print(int state) {
+    int nargs = ki_lua_gettop(state);
+
+    for (int i = 1; i <= nargs; i++) {
+        if (ki_lua_isstring(lua_state, i)) {
+            auto buffer = ki_lua_tostring(state, i);
+            std::cout << "[LUA]\t" << buffer;
+        }
+    }
+
+    std::cout << std::endl;
+
+    return 0;
+}
+
+static const struct luaL_Reg modfuncs[] =
+{
+    { "print", fake_print},
+    { NULL, NULL }
+};
 
 int __stdcall _new_state_hook(int state) {
     lua_state = state;
     printf("ki_kore_newstate created 0x%08X state\n", state);
+
     return state;
 }
 
@@ -138,13 +179,13 @@ std::vector<std::string> files_being_loaded;
 DWORD _require_hook_return = 0;
 bool require_hook_enabled = true;
 
-
-
 void _stdcall _require_hook_end_process(char* pFile) {
     if (require_hook_enabled) {
         require_hook_enabled = false;
         std::string current_file(pFile);
         printf("Finished loading script %s\n", current_file.c_str());
+
+        luaL_register(lua_state, "_G", modfuncs);
 
         // Do stuff with the script
         for (auto script : lua_scripts[current_file]) {
@@ -201,12 +242,27 @@ void hook_require() {
 
 void find_game_functions() {
     std::vector<unsigned int> signature;
+
     signature = create_signature_from_string(LUAL_LOADFILE);
     luaL_loadfile = (int(__cdecl*)(int state, const char* filename))LookupSignature(signature);
+
     signature = create_signature_from_string(LUA_CALL);
     lua_call = (void(__cdecl*)(int state, int nargs, int nresults))LookupSignature(signature);
+
     signature = create_signature_from_string(FREE_STRING);
     free_string = LookupSignature(signature);
+
+    signature = create_signature_from_string(LUA_GETTOP);
+    ki_lua_gettop = (int(__cdecl*)(int state))LookupSignature(signature);
+
+    signature = create_signature_from_string(LUA_TOSTRING);
+    ki_lua_tostring = (const char* (__cdecl*)(int state, int index))LookupSignature(signature);
+
+    signature = create_signature_from_string(LUA_REGISTER);
+    luaL_register = (void(__cdecl*)(int state, const char* libname, const luaL_Reg * r))LookupSignature(signature);
+
+    signature = create_signature_from_string(LUA_ISSTRING);
+    ki_lua_isstring = (int(__cdecl*)(int state, int index))LookupSignature(signature);
 }
 
 void WritePatch(const void* patch_address, const std::vector<unsigned int> &patch) {
@@ -408,9 +464,7 @@ bool LoadMod(std::string path) {
     return true;
 }
 
-bool Initialize() {
-    bool result = true;
-    
+void Initialize() {    
     // Create a console window
     AllocConsole();
     FILE* placeholder;
@@ -428,11 +482,35 @@ bool Initialize() {
     // Load them mods
     for (const auto& entry : std::filesystem::directory_iterator(".\\mods\\")) {
         if (!LoadMod(entry.path().string())) {
-            result = false;
+            printf("Something went wrong loading %s\n", entry.path().string().c_str());
         }
     }
 
-    return result;
+    while (true) {
+        std::string user_input;
+        std::cin >> user_input;
+        std::fstream lua_placeholder("_temp.lua", std::fstream::out);
+        lua_placeholder << user_input;
+        lua_placeholder.close();
+        luaL_loadfile(lua_state, "_temp.lua");
+        try {
+            lua_call(lua_state, 0, 0);
+
+            /*
+            int count = ki_lua_gettop(lua_state);
+
+            for (int i = 0; i < count; i++) {
+                auto buffer = ki_lua_tostring(lua_state, i);
+                std::cout << buffer;
+            }
+
+            std::cout << std::endl;*/
+        }
+        catch (std::exception e) {
+            printf("Error executing command %s\n", e.what());
+        }
+    }
+    return ;
 }
 
 BOOL APIENTRY DllMain( HMODULE hModule,
