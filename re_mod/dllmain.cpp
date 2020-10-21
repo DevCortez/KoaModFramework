@@ -1,13 +1,6 @@
 // dllmain.cpp : Defines the entry point for the DLL application.
 #include "pch.h"
-#include "rapidjson/document.h"
-#include <string>
-#include <iostream>
-#include <filesystem>
-#include <fstream>
-#include <map>
-#include <vector>
-#include <future>
+
 
 using namespace rapidjson;
 
@@ -44,6 +37,64 @@ int (__cdecl *ki_lua_gettop)(int state) = nullptr;
 const char* (__cdecl *ki_lua_tostring)(int state, int index) = nullptr;
 void (__cdecl *luaL_register)(int state, const char* libname, const luaL_Reg* r) = nullptr;
 int (__cdecl *ki_lua_isstring)(int state, int index) = nullptr;
+
+void suspend_game() {
+    auto current_thread = GetCurrentThreadId();
+    auto current_process = GetCurrentProcessId();
+    HANDLE h = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+
+    if (h != INVALID_HANDLE_VALUE) {
+        THREADENTRY32 te;
+        te.dwSize = sizeof(te);
+        if (Thread32First(h, &te)) {
+            do {
+                if (te.dwSize >= FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) +
+                    sizeof(te.th32OwnerProcessID)) {
+                    
+                    if (te.th32ThreadID != current_thread && te.th32OwnerProcessID == current_process) {
+                        // Suspend game's thread
+                        auto thread_handle = OpenThread(THREAD_ALL_ACCESS, false, te.th32ThreadID);
+                        if (thread_handle) {
+                            SuspendThread(thread_handle);
+                            CloseHandle(thread_handle);
+                        }
+                    }
+                }
+                te.dwSize = sizeof(te);
+            } while (Thread32Next(h, &te));
+        }
+        CloseHandle(h);
+    }
+}
+
+void resume_game() {
+    auto current_thread = GetCurrentThreadId();
+    auto current_process = GetCurrentProcessId();
+
+    HANDLE h = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (h != INVALID_HANDLE_VALUE) {
+        THREADENTRY32 te;
+        te.dwSize = sizeof(te);
+        if (Thread32First(h, &te)) {
+            do {
+                if (te.dwSize >= FIELD_OFFSET(THREADENTRY32, th32OwnerProcessID) +
+                    sizeof(te.th32OwnerProcessID)) {
+
+                    if (te.th32ThreadID != current_thread && te.th32OwnerProcessID == current_process) {
+                        // Resume game's thread
+                        auto thread_handle = OpenThread(THREAD_ALL_ACCESS, false, te.th32ThreadID);
+                        if (thread_handle) {
+                            ResumeThread(thread_handle);
+                            CloseHandle(thread_handle);
+                        }
+                    }
+                }
+                te.dwSize = sizeof(te);
+            } while (Thread32Next(h, &te));
+        }
+        CloseHandle(h);
+    }
+}
 
 std::vector<unsigned int> create_signature_from_string(const std::string signature) {
     std::string local_signature = signature;
@@ -185,6 +236,7 @@ void _stdcall _require_hook_end_process(char* pFile) {
         std::string current_file(pFile);
         printf("Finished loading script %s\n", current_file.c_str());
 
+        // Fucking ugly, find a way to move elsewhere idk
         luaL_register(lua_state, "_G", modfuncs);
 
         // Do stuff with the script
@@ -492,6 +544,8 @@ void Initialize() {
         std::fstream lua_placeholder("_temp.lua", std::fstream::out);
         lua_placeholder << user_input;
         lua_placeholder.close();
+        suspend_game();
+
         luaL_loadfile(lua_state, "_temp.lua");
         try {
             lua_call(lua_state, 0, 0);
@@ -509,6 +563,8 @@ void Initialize() {
         catch (std::exception e) {
             printf("Error executing command %s\n", e.what());
         }
+
+        resume_game();
     }
     return ;
 }

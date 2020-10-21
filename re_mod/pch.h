@@ -9,5 +9,14 @@
 
 // add headers that you want to pre-compile here
 #include "framework.h"
+#include "rapidjson/document.h"
+#include <string>
+#include <iostream>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <vector>
+#include <future>
+#include <TlHelp32.h>
 
 #endif //PCH_H
